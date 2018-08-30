@@ -5,7 +5,7 @@ Many pieces of data on the page, including the throughput by sourcetype panel, w
 
 **Panel 1**: host name, IP, Splunk version, last indexer to receive data, number of indexers receiving, number of indexers that returned data for this forwarder for this search, outputs defined, depliyment server, event rate, and KBps.
 
-OPTIONAL: Show indexing lag if 'Show Time Stats" is checked. Makes the search much more resource intensive.
+OPTIONAL: Show indexing lag if 'Show Time Stats' is checked. Makes the search much more resource intensive.
 
 **Panel 2**: Throughput by sourcetype.
 
