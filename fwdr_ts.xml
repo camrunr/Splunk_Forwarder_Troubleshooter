@@ -1,0 +1,178 @@
+<form>
+  <label>Forward Troubleshooter</label>
+  <fieldset submitButton="false">
+    <input type="text" token="fwd_name">
+      <label>Forwarder Name</label>
+    </input>
+    <input type="checkbox" token="cb_time_stats" searchWhenChanged="true">
+      <label></label>
+      <choice value="yes">Show Time Stats (slows top panel)</choice>
+      <change>
+        <condition value="yes">
+          <eval token="cb_time_stats">"index=*"</eval>
+        </condition>
+        <condition>
+          <eval token="cb_time_stats">"index=noooope"</eval>
+        </condition>
+      </change>
+    </input>
+  </fieldset>
+  <row>
+    <panel>
+      <table>
+        <title>Forwarder Info (-4h)</title>
+        <search>
+          <query>index=_internal (broker phonehome connection sourcetype=splunkd_access $fwd_name$) OR (desthost statusmgr sourcetype=splunkd host=$fwd_name$*) OR (sourcetype=splunkd source=*metrics.log* tcpin $fwd_name$) 
+            | rex "(?i)$fwd_name$[^_]*_(?&lt;HOSTvDS&gt;(?i)$fwd_name$[^_]*)" 
+            | eval IDX=if(sourcetype="splunkd" and !match(host,"(?i)$fwd_name$"),host.": ".round(now()-_time,0)."s ago",null),
+               DS=if(sourcetype="splunkd_access",host.": ".round(now()-_time,0)."s ago",null),
+               SPNAME=if(sourcetype!="splunkd_access",splunk_server,null),
+               IDXNAME=if(sourcetype="splunkd" and !match(host,"(?i)$fwd_name$"),host,null),
+               HOST=coalesce(HOSTvDS,hostname,host),
+               SVERSION=if(match(source,"metrics.log"),version,null) 
+            | stats values(fwdType) as fwdType, values(sourceIp) as sourceIp, latest(SVERSION) as version,  values(os) as os, values(arch) as arch, p90(tcp_KBps) as avg_tcp_kbps, p90(tcp_eps) as avg_tcp_eps latest(IDX) as "Last Idx/HF" dc(IDXNAME) as "Idx Rcvrs" dc(SPNAME) as "Idx SPs" values(destHost) as Output latest(DS) as DS by HOST 
+            | eval "KB/Sec"=round(avg_tcp_kbps,0),
+               "Events/Sec"=round(avg_tcp_eps,0),
+               version=version."/".fwdType.":".os."/".arch 
+            | rename sourceIp as IP 
+            | search HOST="$fwd_name$*" 
+            | fields - avg* fwdType os arch 
+            | appendcols [ 
+                tstats count where $cb_time_stats$ host=$fwd_name$ by _time _indextime 
+                  | eval d=_indextime-_time 
+                  | stats max(eval(abs(d))) as Max stdev(d) as StdDev 
+                  | eval Max=round(Max,0), StdDev=round(StdDev,0) 
+                  | rename Max as "Max Time Diff", StdDev as "StdDev Time Diff" ]</query>
+          <earliest>-4h@m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="count">10</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="rowNumbers">false</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <chart>
+        <title>Throughput by sourcetype, KBps (-4h)</title>
+        <search>
+          <query>index=_internal metrics per_sourcetype_thruput sourcetype=splunkd host=$fwd_name$ series!=splunk*
+            | timechart span=5m sum(eval(kb/300)) as MB by series 
+            | fillnull value=0</query>
+          <earliest>-4h@m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="charting.chart">area</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.overflowMode">ellipsisNone</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.rotation">0</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.visibility">visible</option>
+        <option name="charting.axisTitleY2.visibility">visible</option>
+        <option name="charting.axisX.scale">linear</option>
+        <option name="charting.axisY.scale">linear</option>
+        <option name="charting.axisY2.enabled">0</option>
+        <option name="charting.axisY2.scale">inherit</option>
+        <option name="charting.chart.bubbleMaximumSize">50</option>
+        <option name="charting.chart.bubbleMinimumSize">10</option>
+        <option name="charting.chart.bubbleSizeBy">area</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="charting.chart.showDataLabels">none</option>
+        <option name="charting.chart.sliceCollapsingThreshold">0.01</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.chart.style">shiny</option>
+        <option name="charting.drilldown">all</option>
+        <option name="charting.layout.splitSeries">0</option>
+        <option name="charting.layout.splitSeries.allowIndependentYRanges">0</option>
+        <option name="charting.legend.labelStyle.overflowMode">ellipsisMiddle</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+    <panel>
+      <input type="text" token="source_regex">
+        <label>Replace regex</label>
+        <default>regex to remove from source string</default>
+      </input>
+      <input type="text" token="source_match">
+        <label>Only show sources matching this regex</label>
+        <default>.*</default>
+      </input>
+      <table>
+        <title>Total data by source (-4h)</title>
+        <search>
+          <query>index=_internal metrics per_source_thruput sourcetype=splunkd host=$fwd_name$ 
+            | regex series="$source_match$" 
+            | eval source=replace(series,"$source_regex$","*"),
+                source=if(match(source,"splunk.*var.log"),"internal_splunk",source) 
+            | stats sum(eval(kb/1024)) as MB by source 
+            | eval MB=round(MB,2) 
+            | sort - MB</query>
+          <earliest>-4h@m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="count">10</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="rowNumbers">false</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <table>
+        <title>Recent Restarts or Updates (-8h)</title>
+        <search>
+          <query>index=_internal host=$fwd_name$ sourcetype=splunkd DeployedApplication OR "Splunkd starting" 
+            | rex "DeployedApplication - (?&lt;Type&gt;\w+)" 
+            | eval Type=if(isnull(Type),if(match(_raw,"Splunkd starting"),"Startup","unknown"),Type) 
+            | rex field=file "/run/(?&lt;dl&gt;.*)" 
+            | eval Target=coalesce(app,dl) 
+            | table _time host Type Target 
+            | append [ search 
+                index=_internal " " host=$fwd_name$ sourcetype=splunkd HttpPubSubConnection connection 
+                  | stats max(_time) as _time by host 
+                  | eval Target="" 
+                  | table _time host Target
+                  | eval Type="Last Phone Home to DS"  ] 
+            | sort - _time</query>
+          <earliest>-8h@h</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="count">10</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="rowNumbers">false</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <input type="text" token="event_match">
+        <label>Only show logs matching this string</label>
+        <default>" "</default>
+      </input>
+      <table>
+        <title>Recent Interesting Events (-4d)</title>
+        <search>
+          <query>index=_internal $event_match$ host=$fwd_name$ sourcetype=splunkd NOT (tcpoutputproc OR tcpoutputfd OR HttpPubSubConnection OR metrics OR StatusMgr OR "closing stream" OR "connected to idx" OR app/splunkforwarder/var/log/splunk OR "X509 certificate" OR "in case HTTP proxying needs to be enabled" OR "Limiting REST HTTP" OR scheduledviewsreaper)
+  | rex " - (?&lt;message&gt;.*)" 
+  | table _time host component log_level message 
+  | sort - _time</query>
+          <earliest>-96h@h</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="count">30</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="rowNumbers">false</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+</form>
