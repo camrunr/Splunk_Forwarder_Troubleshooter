@@ -22,27 +22,33 @@
       <table>
         <title>Forwarder Info (-4h)</title>
         <search>
-          <query>index=_internal (broker phonehome connection sourcetype=splunkd_access $fwd_name$) OR (desthost statusmgr sourcetype=splunkd host=$fwd_name$*) OR (sourcetype=splunkd source=*metrics.log* tcpin $fwd_name$) 
-            | rex "(?i)$fwd_name$[^_]*_(?&lt;HOSTvDS&gt;(?i)$fwd_name$[^_]*)" 
-            | eval IDX=if(sourcetype="splunkd" and !match(host,"(?i)$fwd_name$"),host.": ".round(now()-_time,0)."s ago",null),
-               DS=if(sourcetype="splunkd_access",host.": ".round(now()-_time,0)."s ago",null),
-               SPNAME=if(sourcetype!="splunkd_access",splunk_server,null),
-               IDXNAME=if(sourcetype="splunkd" and !match(host,"(?i)$fwd_name$"),host,null),
-               HOST=coalesce(HOSTvDS,hostname,host),
-               SVERSION=if(match(source,"metrics.log"),version,null) 
-            | stats values(fwdType) as fwdType, values(sourceIp) as sourceIp, latest(SVERSION) as version,  values(os) as os, values(arch) as arch, p90(tcp_KBps) as avg_tcp_kbps, p90(tcp_eps) as avg_tcp_eps latest(IDX) as "Last Idx/HF" dc(IDXNAME) as "Idx Rcvrs" dc(SPNAME) as "Idx SPs" values(destHost) as Output latest(DS) as DS by HOST 
-            | eval "KB/Sec"=round(avg_tcp_kbps,0),
-               "Events/Sec"=round(avg_tcp_eps,0),
-               version=version."/".fwdType.":".os."/".arch 
-            | rename sourceIp as IP 
-            | search HOST="$fwd_name$*" 
-            | fields - avg* fwdType os arch 
-            | appendcols [ 
-                tstats count where $cb_time_stats$ host=$fwd_name$ by _time _indextime 
-                  | eval d=_indextime-_time 
-                  | stats max(eval(abs(d))) as Max stdev(d) as StdDev 
-                  | eval Max=round(Max,0), StdDev=round(StdDev,0) 
-                  | rename Max as "Max Time Diff", StdDev as "StdDev Time Diff" ]</query>
+          <query>index=_internal (broker phonehome connection sourcetype=splunkd_access $fwd_name$) 
+  OR (desthost statusmgr sourcetype=splunkd host=$fwd_name$*) 
+  OR (sourcetype=splunkd source=*metrics.log* (name=thruput group=thruput host=$fwd_name$) OR (tcpin $fwd_name$)) | addinfo
+| rex "(?i)$fwd_name$[^_]*_(?&lt;HOSTvDS&gt;(?i)$fwd_name$[^_]*)" 
+| eval IDX=if(sourcetype="splunkd" and !match(host,"(?i)$fwd_name$"),host.": ".round(now()-_time,0)."s ago",null),
+    DS=if(sourcetype="splunkd_access",host.": ".round(now()-_time,0)."s ago",null),
+    SPNAME=if(sourcetype!="splunkd_access",splunk_server,null),
+    IDXNAME=if(sourcetype="splunkd" and !match(host,"(?i)$fwd_name$"),host,null),
+    HOST=coalesce(HOSTvDS,hostname,host),
+    SVERSION=if(match(source,"metrics.log"),version,null),
+    METRICS_KB=if(match(source,"metrics.log") and match(host,"(?i)$fwd_name$"),kb,null),
+    METRICS_EV=if(match(source,"metrics.log") and match(host,"(?i)$fwd_name$"),ev,null),
+    SPAN=info_max_time-info_min_time
+| stats values(fwdType) as fwdType, values(sourceIp) as sourceIp, latest(SVERSION) as version, 
+        values(os) as os, values(arch) as arch, sum(eval(METRICS_KB/SPAN)) as "KBps", sum(eval(METRICS_EV/SPAN)) as Eps,
+        latest(IDX) as "Last Idx/HF" dc(IDXNAME) as "Idx Rcvrs" dc(SPNAME) as "Idx SPs",
+        values(destHost) as Output latest(DS) as DS dc(ingest_pipe) as Pipelines by HOST 
+| eval Version=version."/".fwdType.":".os."/".arch,
+       Pipelines=if(Pipelines&lt;2 OR isnull(Pipelines),1,Pipelines)
+| rename sourceIp as IP 
+| search HOST="$fwd_name$*" 
+| fields HOST IP Version DS "Last Idx/HF" "Idx Rcvrs" "Idx SPs" Output KBps Eps Pipelines
+| join HOST type=outer [ tstats count where $cb_time_stats$  host=$fwd_name$ by _time _indextime host
+              | eval d=_indextime-_time 
+              | stats max(eval(abs(d))) as Max stdev(d) as StdDev by host
+              | eval Max=round(Max,0), StdDev=round(StdDev,0) 
+              | rename Max as "Max Time Diff", StdDev as "StdDev Time Diff", host as HOST ]</query>
           <earliest>-4h@m</earliest>
           <latest>now</latest>
         </search>
